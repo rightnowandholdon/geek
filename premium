@@ -1,0 +1,248 @@
+select
+t6.dt,
+--t6.cityid,
+first_in_line,
+first_bubble_line,
+first_call_line,
+
+case when ( first_bubble_line  = 'premium' or first_call_line = 'premium' ) then '首次冒泡或首次发单是专车'
+	 else '非首次冒泡或首次发单是专车' end,
+
+sort_flash,
+sort_premium,
+absolute_premium,
+relative_flash_premium,
+
+use_type,
+is_potential,
+count(distinct sessionid) count_num, --总会话数
+count(distinct case when in_premium_count > 0 then sessionid else null end) in_premium_count, --进入专车会话数
+count(distinct case when premium_bubble_count >0 then  sessionid else null end) premium_estimate_count, --专车冒泡数
+count(distinct case when premium_send_order_count >0 then sessionid else null end) premium_send_order_count  --专车发单数
+
+from (
+select
+t5.dt,
+t5.cityid, 
+t5.sessionid,
+t5.session_start_time,
+t5.passengerid,
+case when t5.first_in_line = 'car-mate' then 'carmate'
+	 when t5.first_in_line = 'dache' then 'unitaxi'
+	 else t5.first_in_line end first_in_line,
+t5.in_premium_count,
+t5.premium_bubble_count, 
+t5.premium_send_order_count, 
+t5.flash_bubble_count, 
+t5.flash_send_order_count, 
+t5.taxi_bubble_count,
+t5.taxi_send_order_count,
+t5.first_bubble_line,
+t5.first_call_line,
+
+
+time_stamp,
+moren_businessid,
+sort_flash,
+sort_premium,
+absolute_premium,
+relative_flash_premium,
+use_type,
+is_potential,
+abs(unix_timestamp(time_stamp)-session_start_time/1000),
+row_number() over (partition by t5.passengerid,sessionid order by abs(unix_timestamp(time_stamp)-session_start_time/1000)) as rnk1
+
+from
+(
+--会话
+
+		  select
+	 		  concat_ws('-',year,month,day) dt,
+	          cityid, 
+	          sessionid,
+	          session_start_time, 
+	          passengerid,
+	          case when (first_in_line is null or first_in_line = '') and first_bubble_line in ('premium','flash','dache','unitaxi','carmate','car-mate','ofo','soda','gongjiao','firstclass') then first_bubble_line 
+				   when (first_in_line is null or first_in_line = '') and first_bubble_line not in ('premium','flash','dache','unitaxi','carmate','car-mate','ofo','soda','gongjiao','firstclass') then '其它业务线'
+				   when (first_in_line is not null and first_in_line <> '') and first_in_line in ('premium','flash','dache','unitaxi','carmate','car-mate','ofo','soda','gongjiao','firstclass') then first_in_line
+							  	 else '其它业务线'end first_in_line, --首次进入的业务线
+
+			  in_premium_count,
+	          premium_bubble_count, 
+	          premium_send_order_count, 
+	          flash_bubble_count, 
+	          flash_send_order_count, 
+	          taxi_bubble_count,
+	          taxi_send_order_count,
+	          first_bubble_line,
+	          first_call_line
+ 
+		  from omega.passenger_session
+          where concat_ws('-',year,month,day) between '${startdate}' and '${enddate}' 
+          and cityid in (1,4,2,3,5,17,18,13,10,24,32,34,11,6,9,12,7,8,19,23,14,16,25,15,33,20,37,26,35,22,21,84,38,85,47,45,82,36,89,116,91,133,29,83,132,27,42,224,86)
+          and in_premium_count+in_flash_count+in_taxi_count>0
+          and appid in (1,2)
+          and passengerid > 0 
+
+
+
+)t5
+
+left outer join
+(
+	--顶导排序
+	select
+	t0.dateid,
+	time_stamp,
+	uid,
+	t0.passenger_id,
+	phone,
+	city_id,
+	data_type,
+	os_type,
+	app_version,
+	moren_businessid,
+	sort_flash,
+	sort_premium,
+	absolute_premium,
+	relative_flash_premium,
+
+	case when member is not null then member
+		 when member is null and datediff(t0.dateid,first_finish_finish_date) <= 30 and datediff(t0.dateid,first_finish_finish_date) >= 0  then '专车新手期用户'
+		 when member is null and datediff(t0.dateid,first_finish_finish_date) > 30 then '专车老用户'
+		 else '专车0单用户'end use_type,
+ 	case when t5.passenger_id is not null then '专车高潜用户'
+ 		 else '非高潜用户' end is_potential
+
+	from (
+
+			select
+			dateid,
+			time_stamp,
+			uid,
+			passenger_id,
+			phone,
+			city_id,
+			data_type,
+			os_type,
+			app_version,
+			moren_businessid,
+			sort_flash,
+			sort_premium,
+
+			case when sort_premium <= 3 then '专车首屏top3'
+				 when sort_premium > 3 and sort_premium <= 5 then '专车首屏3~5'
+				 when sort_premium > 5 then '专车非首屏'
+				 else '其它' end absolute_premium,
+			(sort_flash - sort_premium) relative_flash_premium
+
+			from(
+				select 
+				concat_ws('-',year,month,day) dateid,
+				param['timestamp'] AS time_stamp,
+				param['uid'] uid,
+				cast(param['uid'] as bigint)&281474976710655 as passenger_id,
+				param['phone'] AS phone,
+				param['city_id'] AS city_id,
+				param['data_type'] AS data_type,
+				param['os_type'] AS os_type,
+				param['menu_list'] AS menu_list,
+				param['app_version'] as app_version,
+				param['businessId'] moren_businessid,
+
+				param['sort_flash'] sort_flash,
+				param['sort_premium'] sort_premium,
+				param['sort_carmate'] sort_carmate,
+				param['sort_firstclass'] sort_firstclass,
+				param['sort_unitaxi'] sort_unitaxi,
+				param['sort_dache'] sort_dache,
+				param['sort_ofo'] sort_ofo,
+				param['sort_gongjiao'] sort_gongjiao
+				from pbs_dw.ods_log_pbs_top_navigation 
+				where concat_ws('-',year,month,day) between '${startdate}' and '${enddate}'
+				and prefix_key = 'pbs_top_navigation'
+				and param['businessId'] <> ''
+				and param['uid'] <> 0 
+				and param['city_id'] in (1,4,2,3,5,17,18,13,10,24,32,34,11,6,9,12,7,8,19,23,14,16,25,15,33,20,37,26,35,22,21,84,38,85,47,45,82,36,89,116,91,133,29,83,132,27,42,224,86,153)
+
+			)t1
+			
+			
+	)t0
+
+	left outer join (
+					--0单、专车新手期用户（30内完成首单）、老用户
+
+				select
+				passenger_id,
+				first_finish_finish_time,
+				first_finish_finish_date
+				from (
+
+					select
+					distinct
+			        passenger_id,
+			        first_finish_finish_time,
+			        to_date(first_finish_finish_time) first_finish_finish_date,
+			        row_number() over (partition by passenger_id order by first_finish_finish_time) as rnk
+			        from gulfstream_dw.dwm_gulf_passenger_finish_behavior_his
+			        where  concat_ws('-',year,month,day) = '${enddate}'
+			        and first_finish_product_category = 1
+				)a
+				where rnk =1 
+				
+
+	)t2
+	on t0.passenger_id = t2.passenger_id
+
+	left outer join (
+					--会员用户
+					select
+					distinct
+					concat_ws('-',year,month,day) dateid,
+					pas_id,
+					CASE WHEN level_id = 2 then '银卡会员'
+						 when level_id = 3 then '金卡会员'
+						 when level_id = 4 then '白金会员'
+						 when level_id = 5 then '黑金会员'
+						      END AS member
+					from gulfstream_ods.ods_premier_member_daily_info
+					where concat_ws('-',year,month,day) between '${startdate}' and '${enddate}'
+					and level_id in (2,3,4,5) --会员
+			)t4
+			on t0.dateid = t4.dateid and t0.passenger_id = t4.pas_id
+	left outer join (
+	   --高潜
+  	   select
+  	   concat_ws('-',year,month,day) dateid,
+  	   passenger_id
+  	   from decision.fex_560a45_1554
+  	   where fast_upgrade_gulf_probability>0.5
+  	   and concat_ws('-',year,month,day) between '${startdate}' and '${enddate}'
+
+	)t5
+	on t0.dateid = t5.dateid and t0.passenger_id = t5.passenger_id
+
+)t
+
+on  t5.dt = t.dateid and t5.passengerid = t.passenger_id
+
+where ceiling ((unix_timestamp(time_stamp)-session_start_time/1000)/60) <=30 and ceiling ((unix_timestamp(time_stamp)-session_start_time/1000)/60) >=-30
+
+)t6
+where rnk1 =1 
+group by t6.dt,
+--t6.cityid,
+first_in_line,
+first_bubble_line,
+first_call_line,
+
+case when ( first_bubble_line  = 'premium' or first_call_line = 'premium' ) then '首次冒泡或首次发单是专车'
+	 else '非首次冒泡或首次发单是专车' end,
+sort_flash,
+sort_premium,
+absolute_premium,
+relative_flash_premium,
+
+use_type,
+is_potential
